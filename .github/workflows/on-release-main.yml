@@ -95,8 +95,8 @@ jobs:
             file: ./Dockerfile
             push: true
             tags: |
-              ghcr.io/ai-zerolab/Delamain:${{ steps.vars.outputs.tag }}
-              ghcr.io/ai-zerolab/Delamain:latest
+              ghcr.io/ai-zerolab/delamain:${{ steps.vars.outputs.tag }}
+              ghcr.io/ai-zerolab/delamain:latest
 
   deploy-docs:
     needs: publish
