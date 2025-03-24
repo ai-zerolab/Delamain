@@ -21,6 +21,7 @@ dependencies = [
     "click>=8.1.8",
     "fastapi[standard]>=0.115.12",
     "pydantic>=2.10.6",
+    "pydantic-ai>=0.0.43",
     "pydantic-settings>=2.8.1",
     "uvicorn[standard]>=0.34.0",
 ]
