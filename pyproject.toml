@@ -1,6 +1,6 @@
 [project]
 name = "Delamain"
-version = "0.0.1"
+version = "0.0.0.dev"
 description = "Plan-and-Execute Agents with OpenAI compatible api"
 authors = [{ name = "Wh1isper", email = "jizhongsheng957@gmail.com" }]
 readme = "README.md"
@@ -16,6 +16,13 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "click>=8.1.8",
+    "fastapi[standard]>=0.115.12",
+    "pydantic>=2.10.6",
+    "pydantic-settings>=2.8.1",
+    "uvicorn[standard]>=0.34.0",
 ]
 
 [project.urls]
@@ -104,3 +111,6 @@ skip_empty = true
 [tool.coverage.run]
 branch = true
 source = ["delamain"]
+
+[project.scripts]
+delamain = "delamain.cli:cli"
