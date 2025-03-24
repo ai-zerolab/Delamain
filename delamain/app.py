@@ -15,7 +15,7 @@ app = FastAPI(lifespan=lifespan)
 
 @app.get("/")
 async def hello():
-    return {"message": "Hello World"}
+    return {"message": "Welcome to Delamain! View our project at https://github.com/ai-zerolab/Delamain"}
 
 
 for router in routers:

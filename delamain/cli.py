@@ -12,3 +12,11 @@ def start(host, port):
     Start the server.
     """
     uvicorn.run(app, host=host, port=port)
+
+
+@click.group()
+def cli():
+    pass
+
+
+cli.add_command(start)
