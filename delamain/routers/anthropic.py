@@ -36,21 +36,23 @@ router = APIRouter(
 )
 
 
+class SystemObject(BaseModel):
+    text: str
+
+
 class MessageRequest(BaseModel):
     messages: list[AnthropicMessage]
     tools: list[ToolParam] | None = None
-    system: str | None = None
+    system: str | list[SystemObject] | None = None
 
 
 @router.post("/messages")
 async def anthropic_messages(anthropic_request: MessageRequest) -> EventSourceResponse:
-    print(anthropic_request)
-
     executor_tools = [
         ToolDefinition(
-            name=tool.name,
-            description=tool.description,
-            parameters_json_schema=tool.input_schema,
+            name=tool["name"],
+            description=tool["description"],
+            parameters_json_schema=tool["input_schema"],
         )
         for tool in anthropic_request.tools or []
     ]
@@ -64,21 +66,23 @@ async def anthropic_messages(anthropic_request: MessageRequest) -> EventSourceRe
     async def _():
         # Send message_start event
         message_id = f"msg_{uuid.uuid4().hex}"
+        message_start_data = {
+            "type": "message_start",
+            "message": {
+                "id": message_id,
+                "type": "message",
+                "role": "assistant",
+                "model": "delamain",  # Using a placeholder model name
+                "stop_sequence": None,
+                "usage": {"input_tokens": 0, "output_tokens": 0},
+                "content": [],
+                "stop_reason": None,
+            },
+        }
+        # JSON serialize the data to ensure proper formatting
         yield {
             "event": "message_start",
-            "data": {
-                "type": "message_start",
-                "message": {
-                    "id": message_id,
-                    "type": "message",
-                    "role": "assistant",
-                    "model": "delamain",  # Using a placeholder model name
-                    "stop_sequence": None,
-                    "usage": {"input_tokens": 0, "output_tokens": 0},
-                    "content": [],
-                    "stop_reason": None,
-                },
-            },
+            "data": json.dumps(message_start_data, default=lambda o: None if o is None else o),
         }
 
         # Track content blocks to send stop events
@@ -92,30 +96,39 @@ async def anthropic_messages(anthropic_request: MessageRequest) -> EventSourceRe
             if event_type == "content_block_start":
                 active_blocks.add(data["index"])
 
-            yield {"event": event_type, "data": data}
-
-            # Send ping events periodically (simplified here)
-            yield {"event": "ping", "data": {"type": "ping"}}
+            # JSON serialize the data to ensure proper formatting
+            yield {
+                "event": event_type,
+                "data": json.dumps(data, default=lambda o: None if o is None else o),
+            }
 
         # Send content_block_stop events for any remaining active blocks
         for index in active_blocks:
-            yield {"event": "content_block_stop", "data": {"type": "content_block_stop", "index": index}}
+            content_block_stop_data = {"type": "content_block_stop", "index": index}
+            yield {
+                "event": "content_block_stop",
+                "data": json.dumps(content_block_stop_data, default=lambda o: None if o is None else o),
+            }
 
         # Send message_delta with usage information
+        message_delta_data = {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+            "usage": {
+                "input_tokens": agent.usage.request_tokens or 0,
+                "output_tokens": agent.usage.response_tokens or 0,
+            },
+        }
         yield {
             "event": "message_delta",
-            "data": {
-                "type": "message_delta",
-                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
-                "usage": {
-                    "input_tokens": agent.usage.request_tokens or 0,
-                    "output_tokens": agent.usage.response_tokens or 0,
-                },
-            },
+            "data": json.dumps(message_delta_data, default=lambda o: None if o is None else o),
         }
 
         # Send message_stop event
-        yield {"event": "message_stop", "data": {"type": "message_stop"}}
+        yield {
+            "event": "message_stop",
+            "data": json.dumps({"type": "message_stop"}, default=lambda o: None if o is None else o),
+        }
 
     return EventSourceResponse(
         _(),
@@ -123,10 +136,18 @@ async def anthropic_messages(anthropic_request: MessageRequest) -> EventSourceRe
     )
 
 
-def map_messages(system_prompt: str | None, anthropic_messages: list[AnthropicMessage]) -> list[ModelMessage]:  # noqa: C901
-    system_prompt = system_prompt or ""
+def map_messages(  # noqa: C901
+    system_prompt: str | SystemObject | None, anthropic_messages: list[AnthropicMessage]
+) -> list[ModelMessage]:
+    system_prompt_text = ""
+    if isinstance(system_prompt, list):
+        for obj in system_prompt:
+            system_prompt_text += obj.text
+    elif isinstance(system_prompt, str):
+        system_prompt_text = system_prompt
+
     messages = [
-        ModelRequest(parts=[SystemPromptPart(content=system_prompt)]),
+        ModelRequest(parts=[SystemPromptPart(content=system_prompt_text)]),
     ]
 
     for message in anthropic_messages:
@@ -189,7 +210,11 @@ def map_messages(system_prompt: str | None, anthropic_messages: list[AnthropicMe
             elif content_type == "tool_use":
                 # Convert to ToolCallPart
                 parts.append(
-                    ToolCallPart(tool_name=content["name"], args=content["input"], tool_call_id=content.get("id"))
+                    ToolCallPart(
+                        tool_name=content["name"],
+                        args=content["input"],
+                        tool_call_id=content.get("id"),
+                    )
                 )
 
             elif content_type == "tool_result":
@@ -232,7 +257,7 @@ def map_agent_event(event: AgentStreamEvent) -> tuple[str, dict[str, Any]]:
                     "type": "tool_use",
                     "id": part.tool_call_id or f"toolu_{uuid.uuid4().hex}",
                     "name": part.tool_name,
-                    "input": part.args_as_dict(),
+                    "input": part.args_as_dict() if part.args else {},
                 },
             }
 
@@ -256,13 +281,19 @@ def map_agent_event(event: AgentStreamEvent) -> tuple[str, dict[str, Any]]:
                     return "content_block_delta", {
                         "type": "content_block_delta",
                         "index": event.index,
-                        "delta": {"type": "input_json_delta", "partial_json": delta.args_delta},
+                        "delta": {
+                            "type": "input_json_delta",
+                            "partial_json": delta.args_delta,
+                        },
                     }
                 else:
                     return "content_block_delta", {
                         "type": "content_block_delta",
                         "index": event.index,
-                        "delta": {"type": "input_json_delta", "partial_json": json.dumps(delta.args_delta)},
+                        "delta": {
+                            "type": "input_json_delta",
+                            "partial_json": json.dumps(delta.args_delta),
+                        },
                     }
 
     # Default case for other event types or if we couldn't map

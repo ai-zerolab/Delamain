@@ -180,8 +180,7 @@ class DelamainAgent:
             State.summarize: self.summarizer,
         }
 
-        @self.planner.result_validator
-        async def _(response: AgentResponse | str) -> AgentResponse:
+        async def _validate(response: AgentResponse | str) -> AgentResponse:
             if isinstance(response, str):
                 response = AgentResponse(
                     prompt_for_next_state="",
@@ -190,43 +189,23 @@ class DelamainAgent:
 
             try:
                 self.state = self.state.transfer(response.next_state)
-                logger.debug(f"Transfered to {self.state}")
                 self.next_state_prompt = response.prompt_for_next_state
+                logger.info(f"Transfered to {self.state}, next state prompt: {self.next_state_prompt}")
             except ValueError as e:
                 raise ModelRetry(str(e)) from e
             return response
+
+        @self.planner.result_validator
+        async def _(response: AgentResponse | str) -> AgentResponse:
+            return await _validate(response)
 
         @self.validator.result_validator
         async def _(response: AgentResponse | str) -> AgentResponse:
-            if isinstance(response, str):
-                response = AgentResponse(
-                    prompt_for_next_state="",
-                    next_state=State.exit,
-                )
-
-            try:
-                self.state = self.state.transfer(response.next_state)
-                logger.debug(f"Transfered to {self.state}")
-                self.next_state_prompt = response.prompt_for_next_state
-            except ValueError as e:
-                raise ModelRetry(str(e)) from e
-            return response
+            return await _validate(response)
 
         @self.summarizer.result_validator
         async def _(response: AgentResponse | str) -> AgentResponse:
-            if isinstance(response, str):
-                response = AgentResponse(
-                    prompt_for_next_state="",
-                    next_state=State.exit,
-                )
-
-            try:
-                self.state = self.state.transfer(response.next_state)
-                logger.debug(f"Transfered to {self.state}")
-                self.next_state_prompt = response.prompt_for_next_state
-            except ValueError as e:
-                raise ModelRetry(str(e)) from e
-            return response
+            return await _validate(response)
 
     def _get_planner_tools(self):
         return [
@@ -254,7 +233,7 @@ class DelamainAgent:
         copied_messages[-1].parts = [p for p in copied_messages[-1].parts if not isinstance(p, UserPromptPart)]
 
         if not user_prompt:
-            user_prompt = custom_user_prompt
+            user_prompt = custom_user_prompt if custom_user_prompt else f"Now we are in {self.state} state, go ahead."
 
         # Change first message's system prompt
         for part in copied_messages[0].parts:
@@ -270,6 +249,7 @@ class DelamainAgent:
 
     async def run(self) -> AsyncIterator[AgentStreamEvent]:  # noqa: C901
         last_index = 0
+        print(self.messages)
         while True:
             if self.state == State.exit:
                 return
@@ -289,7 +269,7 @@ class DelamainAgent:
                 return
 
             user_prompt, message_history = self.prepare_messages(agent, self.next_state_prompt)
-            logger.debug(f"Context: {user_prompt} {message_history}")
+            logger.info(f"Context: {user_prompt} {message_history}")
             async with agent.iter(user_prompt, message_history=message_history) as run:
                 async for node in run:
                     if Agent.is_user_prompt_node(node) or Agent.is_end_node(node):
