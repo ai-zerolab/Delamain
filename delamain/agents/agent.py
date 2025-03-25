@@ -13,10 +13,13 @@ from pydantic_ai.messages import (
     AgentStreamEvent,
     FinalResultEvent,
     ModelMessage,
+    ModelRequest,
     PartDeltaEvent,
     PartStartEvent,
+    SystemPromptPart,
     ToolCallPart,
     ToolCallPartDelta,
+    UserPromptPart,
 )
 from pydantic_ai.models import KnownModelName, Model
 from pydantic_ai.settings import ModelSettings
@@ -317,26 +320,3 @@ class DelamainAgent:
             self.messages = run.result.all_messages()
             self.usage += run.result.usage()
             logger.debug(f"Messages: {self.messages}")
-
-
-if __name__ == "__main__":
-    import asyncio
-
-    from pydantic_ai.messages import ModelRequest, SystemPromptPart, UserPromptPart
-
-    async def main():
-        delamain = DelamainAgent.from_config(
-            messages=[
-                ModelRequest(
-                    parts=[
-                        SystemPromptPart(content="Will be replace"),
-                        UserPromptPart(content="Tell me 1+2=?"),
-                    ]
-                )
-            ],
-        )
-        async for event in delamain.run():
-            logger.info(event)
-        print(delamain.usage)
-
-    asyncio.run(main())
