@@ -20,6 +20,7 @@ classifiers = [
 dependencies = [
     "click>=8.1.8",
     "fastapi[standard]>=0.115.12",
+    "jinja2>=3.1.6",
     "pydantic>=2.10.6",
     "pydantic-ai>=0.0.43",
     "pydantic-settings>=2.8.1",
@@ -98,6 +99,8 @@ ignore = [
     "E501",
     # DoNotAssignLambda
     "E731",
+    # raise-vanilla-args
+    "TRY003"
 ]
 
 [tool.ruff.lint.per-file-ignores]

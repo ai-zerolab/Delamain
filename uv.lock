@@ -342,6 +342,7 @@ source = { editable = "." }
 dependencies = [
     { name = "click" },
     { name = "fastapi", extra = ["standard"] },
+    { name = "jinja2" },
     { name = "pydantic" },
     { name = "pydantic-ai" },
     { name = "pydantic-settings" },
@@ -366,6 +367,7 @@ dev = [
 requires-dist = [
     { name = "click", specifier = ">=8.1.8" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.115.12" },
+    { name = "jinja2", specifier = ">=3.1.6" },
     { name = "pydantic", specifier = ">=2.10.6" },
     { name = "pydantic-ai", specifier = ">=0.0.43" },
     { name = "pydantic-settings", specifier = ">=2.8.1" },
