@@ -31,6 +31,10 @@ async def verify_token(request, call_next):
     if not config.api_key:
         return await call_next(request)
     if request.headers.get("Authorization") == f"Bearer {config.api_key}":
+        # OpenAI
+        return await call_next(request)
+    if request.headers.get("x-api-key") == f"{config.api_key}":
+        # Anthropic
         return await call_next(request)
 
     return Response(
