@@ -11,3 +11,21 @@
 Transfer state to the `execute` when you need to perform some operations.
 
 Transfer state to the `validate` or `exit` when you done.
+
+# Tool Definitions
+
+{% for tool in executor_tools %}
+
+## {{ tool.name }}
+
+**Description:** {{ tool.description }}
+
+**Parameters Schema:**
+
+```json
+{{ tool.parameters_json_schema | tojson(indent=2) }}
+```
+
+{% if tool.outer_typed_dict_key %} Outer TypedDict Key: {{ tool.outer_typed_dict_key }} {% endif %}
+
+{% endfor %}

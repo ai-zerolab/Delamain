@@ -9,3 +9,10 @@ Transfer state to the `execute` when you need to perform some operations.
 Transfer state to the `summarize` when you done.
 
 If you want to re-plan, transfer state to the `plan` and tell me why.
+
+## Avaliable Tools for execution:
+
+{% for tool in executor_tools %}
+
+- {{ tool }}
+  {% endfor %}

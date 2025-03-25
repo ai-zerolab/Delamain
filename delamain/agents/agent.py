@@ -6,6 +6,7 @@ from copy import deepcopy
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader
+from pydantic import BaseModel
 from pydantic_ai import ModelRetry
 from pydantic_ai.agent import Agent
 from pydantic_ai.messages import (
@@ -20,6 +21,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.models import KnownModelName, Model
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import ToolDefinition
+from pydantic_ai.usage import Usage
 
 from delamain.agents.executor import Executor
 from delamain.agents.tools import get_internal_tools
@@ -42,6 +44,11 @@ class UnableToProcess(TypeError):
 def render_template(template_file_name: str, **kwargs):
     template = env.get_template(template_file_name)
     return template.render(**kwargs)
+
+
+class AgentResponse(BaseModel):
+    prompt_for_next_state: str
+    next_state: State
 
 
 class State(str, enum.Enum):
@@ -112,32 +119,46 @@ class DelamainAgent:
         executor_model_settings: ModelSettings | None = None,
     ):
         self.messages = messages
+        self.executor_tools = executor_tools or []
 
         self.planner = Agent(
             palnner_model,
             model_settings=planner_model_settings,
-            system_prompt=planner_system_prompt or render_template(DEFAULT_PLANNER_SYSTEM_PROMPT_TEMPLATE),
+            system_prompt=planner_system_prompt
+            or render_template(
+                DEFAULT_PLANNER_SYSTEM_PROMPT_TEMPLATE,
+                **{"executor_tools": self.executor_tools},
+            ),
             tools=self._get_planner_tools(),
-            result_type=State | str,
+            result_type=AgentResponse | str,
             result_tool_name="transfer_state",
             result_tool_description="Transfer to the next state",
         )
         self.validator = Agent(
             validator_model,
             model_settings=validator_model_settings,
-            system_prompt=validator_system_prompt or render_template(DEFAULT_VALIDATOR_SYSTEM_PROMPT_TEMPLATE),
+            system_prompt=validator_system_prompt
+            or render_template(
+                DEFAULT_VALIDATOR_SYSTEM_PROMPT_TEMPLATE,
+                **{"executor_tools": self.executor_tools},
+            ),
             tools=self._get_validator_tools(),
-            result_type=State | str,
+            result_type=AgentResponse | str,
             result_tool_name="transfer_state",
             result_tool_description="Transfer to the next state",
         )
         self.summarizer = Agent(
             summarizer_model,
             model_settings=summarizer_model_settings,
-            system_prompt=summarizer_system_prompt or render_template(DEFAULT_SUMMARIZER_SYSTEM_PROMPT_TEMPLATE),
-            result_type=State | str,
+            system_prompt=summarizer_system_prompt
+            or render_template(
+                DEFAULT_SUMMARIZER_SYSTEM_PROMPT_TEMPLATE,
+            ),
+            result_type=AgentResponse | str,
             result_tool_name="transfer_state",
             result_tool_description="Transfer to the next state",
+            result_retries=3,
+            end_strategy="exhaustive",
         )
 
         self.executor = Executor(
@@ -148,6 +169,8 @@ class DelamainAgent:
         )
 
         self.state: State = State.plan
+        self.usage = Usage()
+        self.next_state_prompt = ""
         self.state_to_agent = {
             State.plan: self.planner,
             State.validate: self.validator,
@@ -155,31 +178,52 @@ class DelamainAgent:
         }
 
         @self.planner.result_validator
-        async def _(state: State | str) -> State:
+        async def _(response: AgentResponse | str) -> AgentResponse:
+            if isinstance(response, str):
+                response = AgentResponse(
+                    prompt_for_next_state="",
+                    next_state=State.exit,
+                )
+
             try:
-                self.state = self.state.transfer(state)
+                self.state = self.state.transfer(response.next_state)
                 logger.debug(f"Transfered to {self.state}")
+                self.next_state_prompt = response.prompt_for_next_state
             except ValueError as e:
                 raise ModelRetry(str(e)) from e
-            return state
+            return response
 
         @self.validator.result_validator
-        async def _(state: State | str) -> State:
+        async def _(response: AgentResponse | str) -> AgentResponse:
+            if isinstance(response, str):
+                response = AgentResponse(
+                    prompt_for_next_state="",
+                    next_state=State.exit,
+                )
+
             try:
-                self.state = self.state.transfer(state)
+                self.state = self.state.transfer(response.next_state)
                 logger.debug(f"Transfered to {self.state}")
+                self.next_state_prompt = response.prompt_for_next_state
             except ValueError as e:
                 raise ModelRetry(str(e)) from e
-            return state
+            return response
 
         @self.summarizer.result_validator
-        async def _(state: State | str) -> State:
+        async def _(response: AgentResponse | str) -> AgentResponse:
+            if isinstance(response, str):
+                response = AgentResponse(
+                    prompt_for_next_state="",
+                    next_state=State.exit,
+                )
+
             try:
-                self.state = self.state.transfer(state)
+                self.state = self.state.transfer(response.next_state)
                 logger.debug(f"Transfered to {self.state}")
+                self.next_state_prompt = response.prompt_for_next_state
             except ValueError as e:
                 raise ModelRetry(str(e)) from e
-            return state
+            return response
 
     def _get_planner_tools(self):
         return [
@@ -194,7 +238,7 @@ class DelamainAgent:
     def __repr__(self):
         return f"DelamainAgent(planner={self.planner.model.model_name}, validator={self.validator.model.model_name}, summarizer={self.summarizer.model.model_name}, executor={self.executor.model.model_name})"
 
-    def prepare_messages(self, agent: Agent) -> tuple[str, list[ModelMessage]]:
+    def prepare_messages(self, agent: Agent, custom_user_prompt: str | None = None) -> tuple[str, list[ModelMessage]]:
         copied_messages = deepcopy(self.messages)
         if not isinstance(copied_messages[-1], ModelRequest):
             raise UnableToProcess(f"Last message is not a request: {copied_messages[-1]}")
@@ -207,7 +251,7 @@ class DelamainAgent:
         copied_messages[-1].parts = [p for p in copied_messages[-1].parts if not isinstance(p, UserPromptPart)]
 
         if not user_prompt:
-            user_prompt = f"Now we are in {self.state} state, go ahead."
+            user_prompt = custom_user_prompt
 
         # Change first message's system prompt
         for part in copied_messages[0].parts:
@@ -228,10 +272,11 @@ class DelamainAgent:
                 return
 
             if self.state == State.execute:
-                async for event in self.executor.run(self.messages):
+                async for event in self.executor.run(self.next_state_prompt, self.messages):
                     event = self.patch_index(event, last_index)
                     yield event
                 last_index = event.index + 1
+                self.usage += self.executor.usage()
                 return
 
             assert self.state in self.state_to_agent  # noqa: S101
@@ -240,7 +285,7 @@ class DelamainAgent:
             if not isinstance(self.messages[-1], ModelRequest):
                 return
 
-            user_prompt, message_history = self.prepare_messages(agent)
+            user_prompt, message_history = self.prepare_messages(agent, self.next_state_prompt)
             logger.debug(f"Context: {user_prompt} {message_history}")
             async with agent.iter(user_prompt, message_history=message_history) as run:
                 async for node in run:
@@ -270,6 +315,7 @@ class DelamainAgent:
                             logger.debug(f"Last index: {last_index}")
 
             self.messages = run.result.all_messages()
+            self.usage += run.result.usage()
             logger.debug(f"Messages: {self.messages}")
 
 
@@ -283,15 +329,14 @@ if __name__ == "__main__":
             messages=[
                 ModelRequest(
                     parts=[
-                        SystemPromptPart(content="hello"),
-                        UserPromptPart(
-                            content="Tell me 1+2=?,Do not enter execute mode and use validator to check and summarize. Don't just use tools, talk to me"
-                        ),
+                        SystemPromptPart(content="Will be replace"),
+                        UserPromptPart(content="Tell me 1+2=?"),
                     ]
                 )
-            ]
+            ],
         )
         async for event in delamain.run():
             logger.info(event)
+        print(delamain.usage)
 
     asyncio.run(main())
