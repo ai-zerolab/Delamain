@@ -9,7 +9,7 @@ def get_internal_tools() -> list[Tool]:
 
 
 def _think_tool() -> Tool:
-    def _(
+    async def _(
         thought: Annotated[str, Field(description="A thought to think about.")],
     ) -> dict[str, str]:
         return {

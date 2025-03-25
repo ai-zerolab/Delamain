@@ -2,20 +2,29 @@ from __future__ import annotations
 
 import enum
 from collections.abc import AsyncIterator
+from copy import deepcopy
 from pathlib import Path
-from typing import Annotated
 
 from jinja2 import Environment, FileSystemLoader
 from pydantic_ai import ModelRetry
 from pydantic_ai.agent import Agent
-from pydantic_ai.messages import AgentStreamEvent, ModelMessage
+from pydantic_ai.messages import (
+    AgentStreamEvent,
+    FinalResultEvent,
+    ModelMessage,
+    PartDeltaEvent,
+    PartStartEvent,
+    ToolCallPart,
+    ToolCallPartDelta,
+)
 from pydantic_ai.models import KnownModelName, Model
 from pydantic_ai.settings import ModelSettings
-from pydantic_ai.tools import Tool, ToolDefinition
+from pydantic_ai.tools import ToolDefinition
 
 from delamain.agents.executor import Executor
 from delamain.agents.tools import get_internal_tools
 from delamain.config import get_config
+from delamain.log import logger
 
 _HERE = Path(__file__).parent
 env = Environment(loader=FileSystemLoader(_HERE / "prompts"), autoescape=True)
@@ -24,6 +33,10 @@ DEFAULT_PLANNER_SYSTEM_PROMPT_TEMPLATE = "planner_system_prompt.md"
 DEFAULT_VALIDATOR_SYSTEM_PROMPT_TEMPLATE = "validator_system_prompt.md"
 DEFAULT_SUMMARIZER_SYSTEM_PROMPT_TEMPLATE = "summarizer_system_prompt.md"
 DEFAULT_EXECUTOR_SYSTEM_PROMPT_TEMPLATE = "executor_system_prompt.md"
+
+
+class UnableToProcess(TypeError):
+    pass
 
 
 def render_template(template_file_name: str, **kwargs):
@@ -38,7 +51,8 @@ class State(str, enum.Enum):
     execute = "execute"
     exit = "exit"
 
-    def transfer(self, to_state: State) -> State:
+    def transfer(self, to_state: State | str) -> State:
+        to_state = State(to_state)
         if to_state.value not in self._allow[self]:
             raise ValueError(f"Invalid transition from {self} to {to_state}, allowed: {self._allow[self]}")
         return to_state
@@ -49,7 +63,7 @@ class State(str, enum.Enum):
             State.plan: [State.validate, State.execute, State.exit],
             State.validate: [State.summarize, State.execute, State.exit],
             State.execute: [],
-            State.summarize: [],
+            State.summarize: [State.exit],
             State.exit: [],
         }
 
@@ -104,18 +118,26 @@ class DelamainAgent:
             model_settings=planner_model_settings,
             system_prompt=planner_system_prompt or render_template(DEFAULT_PLANNER_SYSTEM_PROMPT_TEMPLATE),
             tools=self._get_planner_tools(),
+            result_type=State | str,
+            result_tool_name="transfer_state",
+            result_tool_description="Transfer to the next state",
         )
         self.validator = Agent(
             validator_model,
             model_settings=validator_model_settings,
             system_prompt=validator_system_prompt or render_template(DEFAULT_VALIDATOR_SYSTEM_PROMPT_TEMPLATE),
             tools=self._get_validator_tools(),
+            result_type=State | str,
+            result_tool_name="transfer_state",
+            result_tool_description="Transfer to the next state",
         )
         self.summarizer = Agent(
             summarizer_model,
             model_settings=summarizer_model_settings,
             system_prompt=summarizer_system_prompt or render_template(DEFAULT_SUMMARIZER_SYSTEM_PROMPT_TEMPLATE),
-            result_type=str,
+            result_type=State | str,
+            result_tool_name="transfer_state",
+            result_tool_description="Transfer to the next state",
         )
 
         self.executor = Executor(
@@ -132,47 +154,144 @@ class DelamainAgent:
             State.summarize: self.summarizer,
         }
 
-    def _state_transfer_tool(self) -> Tool:
-        def _(to_state: Annotated[State, "The state to transfer to"]):
+        @self.planner.result_validator
+        async def _(state: State | str) -> State:
             try:
-                self.state = self.state.transfer(to_state)
+                self.state = self.state.transfer(state)
+                logger.debug(f"Transfered to {self.state}")
             except ValueError as e:
                 raise ModelRetry(str(e)) from e
+            return state
 
-        return Tool(
-            _,
-            name="transfer_state",
-            description="Transfer current state to another state",
-            max_retries=3,
-        )
+        @self.validator.result_validator
+        async def _(state: State | str) -> State:
+            try:
+                self.state = self.state.transfer(state)
+                logger.debug(f"Transfered to {self.state}")
+            except ValueError as e:
+                raise ModelRetry(str(e)) from e
+            return state
+
+        @self.summarizer.result_validator
+        async def _(state: State | str) -> State:
+            try:
+                self.state = self.state.transfer(state)
+                logger.debug(f"Transfered to {self.state}")
+            except ValueError as e:
+                raise ModelRetry(str(e)) from e
+            return state
 
     def _get_planner_tools(self):
         return [
-            self._state_transfer_tool(),
             *get_internal_tools(),
         ]
 
     def _get_validator_tools(self):
         return [
-            self._state_transfer_tool(),
             *get_internal_tools(),
         ]
 
     def __repr__(self):
         return f"DelamainAgent(planner={self.planner.model.model_name}, validator={self.validator.model.model_name}, summarizer={self.summarizer.model.model_name}, executor={self.executor.model.model_name})"
 
-    async def run(self) -> AsyncIterator[AgentStreamEvent]:
-        yield "hello"
+    def prepare_messages(self, agent: Agent) -> tuple[str, list[ModelMessage]]:
+        copied_messages = deepcopy(self.messages)
+        if not isinstance(copied_messages[-1], ModelRequest):
+            raise UnableToProcess(f"Last message is not a request: {copied_messages[-1]}")
+
+        user_prompt = ""
+        for p in copied_messages[-1].parts:
+            if isinstance(p, UserPromptPart):
+                user_prompt = p.content
+        # Drop user prompt of message history
+        copied_messages[-1].parts = [p for p in copied_messages[-1].parts if not isinstance(p, UserPromptPart)]
+
+        if not user_prompt:
+            user_prompt = f"Now we are in {self.state} state, go ahead."
+
+        # Change first message's system prompt
+        for part in copied_messages[0].parts:
+            if isinstance(part, SystemPromptPart):
+                part.content, *_ = agent._system_prompts
+
+        return user_prompt, copied_messages
+
+    def patch_index(self, event: AgentStreamEvent, last_index: int) -> AgentStreamEvent:
+        copied_event = deepcopy(event)
+        copied_event.index += last_index
+        return copied_event
+
+    async def run(self) -> AsyncIterator[AgentStreamEvent]:  # noqa: C901
+        last_index = 0
+        while True:
+            if self.state == State.exit:
+                return
+
+            if self.state == State.execute:
+                async for event in self.executor.run(self.messages):
+                    event = self.patch_index(event, last_index)
+                    yield event
+                last_index = event.index + 1
+                return
+
+            assert self.state in self.state_to_agent  # noqa: S101
+            agent = self.state_to_agent[self.state]
+
+            if not isinstance(self.messages[-1], ModelRequest):
+                return
+
+            user_prompt, message_history = self.prepare_messages(agent)
+            logger.debug(f"Context: {user_prompt} {message_history}")
+            async with agent.iter(user_prompt, message_history=message_history) as run:
+                async for node in run:
+                    if Agent.is_user_prompt_node(node) or Agent.is_end_node(node):
+                        continue
+
+                    if Agent.is_call_tools_node(node):
+                        continue
+
+                    if Agent.is_model_request_node(node):
+                        async with node.stream(run.ctx) as request_stream:
+                            last_yield_index = None
+                            async for event in request_stream:
+                                if (
+                                    (isinstance(event, PartStartEvent) and isinstance(event.part, ToolCallPart))
+                                    or (
+                                        isinstance(event, PartDeltaEvent) and isinstance(event.delta, ToolCallPartDelta)
+                                    )
+                                    or isinstance(event, FinalResultEvent)
+                                ):
+                                    logger.debug(f"Skipping event: {event}")
+                                    continue
+                                event = self.patch_index(event, last_index)
+                                yield event
+                                last_yield_index = event.index
+                            last_index = last_yield_index + 1 if last_yield_index is not None else last_index
+                            logger.debug(f"Last index: {last_index}")
+
+            self.messages = run.result.all_messages()
+            logger.debug(f"Messages: {self.messages}")
 
 
 if __name__ == "__main__":
     import asyncio
 
-    from delamain.config import get_config
+    from pydantic_ai.messages import ModelRequest, SystemPromptPart, UserPromptPart
 
     async def main():
-        delamain = DelamainAgent.from_config([])
+        delamain = DelamainAgent.from_config(
+            messages=[
+                ModelRequest(
+                    parts=[
+                        SystemPromptPart(content="hello"),
+                        UserPromptPart(
+                            content="Tell me 1+2=?,Do not enter execute mode and use validator to check and summarize. Don't just use tools, talk to me"
+                        ),
+                    ]
+                )
+            ]
+        )
         async for event in delamain.run():
-            print(event)
+            logger.info(event)
 
     asyncio.run(main())

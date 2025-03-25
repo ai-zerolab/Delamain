@@ -1,3 +1,6 @@
+from collections.abc import AsyncIterator
+
+from pydantic_ai.messages import ModelMessage, ModelResponseStreamEvent
 from pydantic_ai.models import KnownModelName, Model, infer_model
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import ToolDefinition
@@ -15,3 +18,6 @@ class Executor:
         self.system_prompt = system_prompt
         self.model_settings = model_settings
         self.tools = tools or []
+
+    async def run(self, messages: list[ModelMessage]) -> AsyncIterator[ModelResponseStreamEvent]:
+        yield "world"

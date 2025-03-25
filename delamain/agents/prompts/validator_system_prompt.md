@@ -4,8 +4,8 @@
 1. **Error Analysis:** Identify any issues or inconsistencies and explain them.
 1. **Improvement Suggestions:** Provide recommendations for making the input clearer, more effective, or more efficient.
 
-Use `transfer_state` to transition to the `execute` state when you need to perform some operations.
+Transfer state to the `execute` when you need to perform some operations.
 
-Use `transfer_state` to transition to the `exit` state when you need more information or clarification.
+Transfer state to the `summarize` when you done.
 
-When you think the plan is complete, either succeeded or failed, use `transfer_state` to transition to the `summarizer` state.
+If you want to re-plan, transfer state to the `plan` and tell me why.

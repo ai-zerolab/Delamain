@@ -8,8 +8,6 @@
 1. **Resources:** List any tools, knowledge, or support required.
 1. **Risks & Mitigation:** Identify potential challenges and propose solutions.
 
-Use `transfer_state` to transition to the `executor` state when you need to perform some operations.
+Transfer state to the `execute` when you need to perform some operations.
 
-Use `transfer_state` to transition to the `exit` state when you need more information or clarification.
-
-When you think the plan is complete, use `transfer_state` to transition to the `validator` state.
+Transfer state to the `validate` or `exit` when you done.
