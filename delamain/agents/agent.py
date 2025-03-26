@@ -19,6 +19,7 @@ from pydantic_ai.messages import (
     SystemPromptPart,
     ToolCallPart,
     ToolCallPartDelta,
+    ToolReturnPart,
     UserPromptPart,
 )
 from pydantic_ai.models import KnownModelName, Model
@@ -89,7 +90,7 @@ class DelamainAgent:
         return cls(
             messages,
             executor_tools=executor_tools,
-            palnner_model=config.planner_model,
+            planner_model=config.planner_model,
             validator_model=config.validator_model,
             summarizer_model=config.summarizer_model,
             executor_model=config.executor_model,
@@ -107,7 +108,7 @@ class DelamainAgent:
         self,
         messages: list[ModelMessage],
         executor_tools: list[ToolDefinition] | None = None,
-        palnner_model: Model | KnownModelName | None = None,
+        planner_model: Model | KnownModelName | None = None,
         validator_model: Model | KnownModelName | None = None,
         summarizer_model: Model | KnownModelName | None = None,
         executor_model: Model | KnownModelName | None = None,
@@ -124,8 +125,17 @@ class DelamainAgent:
         self.messages = messages
         self.executor_tools = executor_tools or []
 
+        self.manager = Agent(
+            planner_model,
+            model_settings=planner_model_settings,
+            system_prompt="""
+Choose the next state from `plan`, `validate`, `summarize` or `exit`.
+- You need to check if the current information is sufficient, and if not, use `plan`.
+""",
+            result_type=State,
+        )
         self.planner = Agent(
-            palnner_model,
+            planner_model,
             model_settings=planner_model_settings,
             system_prompt=planner_system_prompt
             or render_template(
@@ -170,10 +180,9 @@ class DelamainAgent:
             model_settings=executor_model_settings,
             tools=executor_tools or [],
         )
-
         self.state: State = State.plan
         self.usage = Usage()
-        self.next_state_prompt = ""
+        self.next_state_prompt: str | None = None
         self.state_to_agent = {
             State.plan: self.planner,
             State.validate: self.validator,
@@ -233,69 +242,114 @@ class DelamainAgent:
         copied_messages[-1].parts = [p for p in copied_messages[-1].parts if not isinstance(p, UserPromptPart)]
 
         if not user_prompt:
-            user_prompt = custom_user_prompt if custom_user_prompt else f"Now we are in {self.state} state, go ahead."
+            user_prompt = (
+                custom_user_prompt
+                if custom_user_prompt
+                else "Please check the previous output and continue the conversation."
+            )
 
         # Change first message's system prompt
         for part in copied_messages[0].parts:
             if isinstance(part, SystemPromptPart):
-                part.content, *_ = agent._system_prompts
+                delamain_system_prompt, *_ = agent._system_prompts
+                part.content = f"""
+{delamain_system_prompt}
 
+<Project Instructions>
+{part.content}
+</Project Instructions>
+"""
         return user_prompt, copied_messages
 
-    def patch_index(self, event: AgentStreamEvent, last_index: int) -> AgentStreamEvent:
-        copied_event = deepcopy(event)
-        copied_event.index += last_index
-        return copied_event
+    def _is_tool_return_messages(self, messages: list[ModelMessage]) -> bool:
+        last_message = messages[-1]
+        if not isinstance(last_message, ModelRequest):
+            return False
+
+        return any(isinstance(part, ToolReturnPart) for part in last_message.parts)
+
+    def _is_tool_call_messages(self, messages: list[ModelMessage]) -> bool:
+        last_message = messages[-1]
+        if isinstance(last_message, ModelRequest):
+            return False
+
+        return any(isinstance(part, ToolCallPart) for part in last_message.parts)
+
+    def _format_messages(self, messages: list[ModelMessage]) -> str:
+        return "\n".join([str(m) for m in messages])
 
     async def run(self) -> AsyncIterator[AgentStreamEvent]:  # noqa: C901
-        last_index = 0
-        print(self.messages)
         while True:
             if self.state == State.exit:
                 return
-
-            if self.state == State.execute:
+            while self.state == State.execute or self._is_tool_return_messages(self.messages):
+                # Transfer to execute state or callback from client
                 async for event in self.executor.run(self.next_state_prompt, self.messages):
-                    event = self.patch_index(event, last_index)
                     yield event
-                last_index = event.index + 1
+                self.messages = self.executor.all_messages()
                 self.usage += self.executor.usage()
-                return
 
+                if self._is_tool_call_messages(self.messages):
+                    logger.info("Executor request tool call, exiting")
+                    return
+                self.state = (
+                    await self.manager.run(
+                        f"Previous messages: {self._format_messages(self.messages)}",
+                    )
+                ).data
+                logger.info(f"Next state: {self.state}")
+                if self.state == State.exit:
+                    return
+                if self.state != State.execute:
+                    self.messages.append(ModelRequest(parts=[]))
+
+            if self.state == State.exit:
+                return
+            self.state = (
+                await self.manager.run(
+                    f"Previous messages: {self._format_messages(self.messages)}",
+                )
+            ).data
+            logger.info(f"Next state: {self.state}")
+            if self.state == State.exit:
+                return
+            logger.info(f"Use state: {self.state}")
             assert self.state in self.state_to_agent  # noqa: S101
             agent = self.state_to_agent[self.state]
 
             if not isinstance(self.messages[-1], ModelRequest):
+                logger.warning(f"Last message is not a request: {self.messages[-1]}, exiting")
                 return
 
             user_prompt, message_history = self.prepare_messages(agent, self.next_state_prompt)
-            logger.info(f"Context: {user_prompt} {message_history}")
-            async with agent.iter(user_prompt, message_history=message_history) as run:
-                async for node in run:
-                    if Agent.is_user_prompt_node(node) or Agent.is_end_node(node):
-                        continue
+            logger.info(f"Starting {self.state} state, prompt: {user_prompt}")
+            logger.debug(f"Context: {message_history}")
+            try:
+                async with agent.iter(user_prompt, message_history=message_history) as run:
+                    async for node in run:
+                        if Agent.is_user_prompt_node(node) or Agent.is_end_node(node) or Agent.is_call_tools_node(node):
+                            continue
 
-                    if Agent.is_call_tools_node(node):
-                        continue
+                        elif Agent.is_model_request_node(node):
+                            async with node.stream(run.ctx) as request_stream:
+                                async for event in request_stream:
+                                    if (
+                                        not event
+                                        or (isinstance(event, PartStartEvent) and isinstance(event.part, ToolCallPart))
+                                        or (
+                                            isinstance(event, PartDeltaEvent)
+                                            and isinstance(event.delta, ToolCallPartDelta)
+                                        )
+                                        or isinstance(event, FinalResultEvent)
+                                    ):
+                                        continue
 
-                    if Agent.is_model_request_node(node):
-                        async with node.stream(run.ctx) as request_stream:
-                            last_yield_index = None
-                            async for event in request_stream:
-                                if (
-                                    (isinstance(event, PartStartEvent) and isinstance(event.part, ToolCallPart))
-                                    or (
-                                        isinstance(event, PartDeltaEvent) and isinstance(event.delta, ToolCallPartDelta)
-                                    )
-                                    or isinstance(event, FinalResultEvent)
-                                ):
-                                    logger.debug(f"Skipping event: {event}")
-                                    continue
-                                event = self.patch_index(event, last_index)
-                                yield event
-                                last_yield_index = event.index
-                            last_index = last_yield_index + 1 if last_yield_index is not None else last_index
-                            logger.debug(f"Last index: {last_index}")
+                                    yield event
+                        else:
+                            logger.warning(f"Unknown node: {node}")
+            except Exception:
+                logger.error(f"Conversation failed, prompt: {user_prompt}, context: {message_history}")
+                raise
 
             self.messages = run.result.all_messages()
             self.usage += run.result.usage()

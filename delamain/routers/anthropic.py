@@ -94,9 +94,24 @@ async def anthropic_messages(anthropic_request: MessageRequest) -> EventSourceRe
 
             # Track active blocks for stop events
             if event_type == "content_block_start":
+                # map one start into start+delta
                 active_blocks.add(data["index"])
-
-            # JSON serialize the data to ensure proper formatting
+                text_data = None
+                if data["content_block"] and data["content_block"]["type"] == "text":
+                    text_data = data["content_block"]["text"]
+                    data["content_block"]["text"] = ""
+                # JSON serialize the data to ensure proper formatting
+                yield {
+                    "event": event_type,
+                    "data": json.dumps(data, default=lambda o: None if o is None else o),
+                }
+                if text_data:
+                    event_type = "content_block_delta"
+                    data = {
+                        "type": "content_block_delta",
+                        "index": data["index"],
+                        "delta": {"type": "text_delta", "text": text_data},
+                    }
             yield {
                 "event": event_type,
                 "data": json.dumps(data, default=lambda o: None if o is None else o),

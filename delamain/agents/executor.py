@@ -32,6 +32,7 @@ class Executor:
         self.model_settings = model_settings
         self.tools = tools or []
         self._usage = Usage()
+        self._messages = None
 
     def prepare_messages(self, prompt: str, messages: list[ModelMessage]) -> list[ModelMessage]:
         copied_messages = deepcopy(messages)
@@ -42,10 +43,11 @@ class Executor:
                 part.content = self.system_prompt
 
         # Append user prompt
-        if isinstance(copied_messages[-1], ModelRequest):
-            copied_messages[-1].parts.append(UserPromptPart(content=prompt))
-        else:
-            copied_messages.append(ModelRequest(parts=[UserPromptPart(content=prompt)]))
+        if prompt:
+            if isinstance(copied_messages[-1], ModelRequest):
+                copied_messages[-1].parts.append(UserPromptPart(content=prompt))
+            else:
+                copied_messages.append(ModelRequest(parts=[UserPromptPart(content=prompt)]))
 
         return copied_messages
 
@@ -63,5 +65,10 @@ class Executor:
                 yield message
             self._usage.incr(response.usage(), requests=1)
 
+        self._messages = [*messages, response.get()]
+
     def usage(self) -> Usage:
         return self._usage
+
+    def all_messages(self) -> list[ModelMessage]:
+        return self._messages
