@@ -16,6 +16,7 @@ class Config(BaseSettings):
     summarizer_model: Model | KnownModelName
     executor_model: Model | KnownModelName
 
+    manage_system_prompt: str | None = None
     planner_system_prompt: str | None = None
     validator_system_prompt: str | None = None
     summarizer_system_prompt: str | None = None

@@ -35,6 +35,7 @@ from delamain.log import logger
 _HERE = Path(__file__).parent
 env = Environment(loader=FileSystemLoader(_HERE / "prompts"), autoescape=True)
 
+DEFAULT_MANAGE_SYSTEM_PROMPT_TEMPLATE = "manage_system_prompt.md"
 DEFAULT_PLANNER_SYSTEM_PROMPT_TEMPLATE = "planner_system_prompt.md"
 DEFAULT_VALIDATOR_SYSTEM_PROMPT_TEMPLATE = "validator_system_prompt.md"
 DEFAULT_SUMMARIZER_SYSTEM_PROMPT_TEMPLATE = "summarizer_system_prompt.md"
@@ -94,6 +95,7 @@ class DelamainAgent:
             validator_model=config.validator_model,
             summarizer_model=config.summarizer_model,
             executor_model=config.executor_model,
+            manage_system_prompt=config.manage_system_prompt,
             planner_system_prompt=config.planner_system_prompt,
             validator_system_prompt=config.validator_system_prompt,
             summarizer_system_prompt=config.summarizer_system_prompt,
@@ -113,6 +115,7 @@ class DelamainAgent:
         summarizer_model: Model | KnownModelName | None = None,
         executor_model: Model | KnownModelName | None = None,
         *,
+        manage_system_prompt: str | None = None,
         planner_system_prompt: str | None = None,
         validator_system_prompt: str | None = None,
         summarizer_system_prompt: str | None = None,
@@ -128,11 +131,14 @@ class DelamainAgent:
         self.manager = Agent(
             planner_model,
             model_settings=planner_model_settings,
-            system_prompt="""
-Choose the next state from `plan`, `validate`, `summarize` or `exit`.
-- You need to check if the current information is sufficient, and if not, use `plan`.
-""",
+            system_prompt=manage_system_prompt
+            or render_template(
+                DEFAULT_MANAGE_SYSTEM_PROMPT_TEMPLATE,
+                **{"executor_tools": self.executor_tools},
+            ),
             result_type=State,
+            result_tool_name="transfer_state",
+            result_tool_description="Transfer to the next state",
         )
         self.planner = Agent(
             planner_model,
@@ -275,14 +281,18 @@ Choose the next state from `plan`, `validate`, `summarize` or `exit`.
 
         return any(isinstance(part, ToolCallPart) for part in last_message.parts)
 
-    def _format_messages(self, messages: list[ModelMessage]) -> str:
-        return "\n".join([str(m) for m in messages])
-
     async def run(self) -> AsyncIterator[AgentStreamEvent]:  # noqa: C901
         while True:
             if self.state == State.exit:
                 return
             while self.state == State.execute or self._is_tool_return_messages(self.messages):
+                if (
+                    await self.manager.run(
+                        "Please check the previous output and give the new state.",
+                        message_history=self.messages,
+                    )
+                ).data == State.exit:
+                    return
                 # Transfer to execute state or callback from client
                 async for event in self.executor.run(self.next_state_prompt, self.messages):
                     yield event
@@ -294,25 +304,18 @@ Choose the next state from `plan`, `validate`, `summarize` or `exit`.
                     return
                 self.state = (
                     await self.manager.run(
-                        f"Previous messages: {self._format_messages(self.messages)}",
+                        "Please check the previous output and give the new state.",
+                        message_history=self.messages,
                     )
                 ).data
-                logger.info(f"Next state: {self.state}")
                 if self.state == State.exit:
                     return
-                if self.state != State.execute:
-                    self.messages.append(ModelRequest(parts=[]))
+                logger.info(f"Next state: {self.state}")
+                self.messages.append(ModelRequest(parts=[UserPromptPart(content="Continue.")]))
 
             if self.state == State.exit:
                 return
-            self.state = (
-                await self.manager.run(
-                    f"Previous messages: {self._format_messages(self.messages)}",
-                )
-            ).data
-            logger.info(f"Next state: {self.state}")
-            if self.state == State.exit:
-                return
+
             logger.info(f"Use state: {self.state}")
             assert self.state in self.state_to_agent  # noqa: S101
             agent = self.state_to_agent[self.state]

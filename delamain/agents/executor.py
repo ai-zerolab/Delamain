@@ -55,7 +55,7 @@ class Executor:
         messages = self.prepare_messages(prompt, messages)
         model_request_parameters = ModelRequestParameters(
             function_tools=self.tools,
-            allow_text_result=True,
+            allow_text_result=False,
             result_tools=[],
         )
         async with self.model.request_stream(messages, self.model_settings, model_request_parameters) as response:
@@ -63,9 +63,8 @@ class Executor:
                 if not message:
                     continue
                 yield message
+            self._messages = [*messages, response.get()]
             self._usage.incr(response.usage(), requests=1)
-
-        self._messages = [*messages, response.get()]
 
     def usage(self) -> Usage:
         return self._usage
