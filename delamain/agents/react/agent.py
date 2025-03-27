@@ -25,6 +25,7 @@ from pydantic_ai.usage import Usage
 
 from delamain.agents.executor import Executor
 from delamain.agents.mas.agent import UnableToProcess
+from delamain.agents.utils import get_model
 from delamain.config import get_config
 from delamain.log import logger
 
@@ -78,7 +79,7 @@ class DelamainReAct:
         self.executor_tools = executor_tools or []
 
         self.reasoning_agent = Agent(
-            reasoning_model,
+            get_model(reasoning_model),
             model_settings=reasoning_model_settings,
             system_prompt=reasoning_system_prompt
             or env.get_template(DEFAULT_REASONING_SYSTEM_PROMPT_TEMPLATE).render(**{
@@ -87,7 +88,7 @@ class DelamainReAct:
         )
 
         self.executor = Executor(
-            executor_model,
+            get_model(executor_model),
             system_prompt=executor_system_prompt or render_template(DEFAULT_EXECUTOR_SYSTEM_PROMPT_TEMPLATE),
             model_settings=executor_model_settings,
             tools=self.executor_tools,
