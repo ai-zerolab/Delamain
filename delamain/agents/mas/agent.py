@@ -27,7 +27,7 @@ from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import ToolDefinition
 from pydantic_ai.usage import Usage
 
-from delamain.agents.mas.executor import Executor
+from delamain.agents.executor import Executor
 from delamain.agents.mas.tools import get_internal_tools
 from delamain.config import get_config
 from delamain.log import logger
@@ -83,6 +83,8 @@ class State(str, enum.Enum):
 class DelamainMAS:
     """
     Multi-Agent System (MAS)
+
+    TODO: Adjust the planner, and some failure case
     """
 
     @classmethod
@@ -237,7 +239,7 @@ class DelamainMAS:
         ]
 
     def __repr__(self):
-        return f"DelamainAgent(planner={self.planner.model.model_name}, validator={self.validator.model.model_name}, summarizer={self.summarizer.model.model_name}, executor={self.executor.model.model_name})"
+        return f"DelamainMAS(planner={self.planner.model.model_name}, validator={self.validator.model.model_name}, summarizer={self.summarizer.model.model_name}, executor={self.executor.model.model_name})"
 
     def prepare_messages(self, agent: Agent, custom_user_prompt: str | None = None) -> tuple[str, list[ModelMessage]]:
         copied_messages = deepcopy(self.messages)

@@ -26,6 +26,7 @@ class Executor:
         system_prompt: str | None = None,
         model_settings: ModelSettings | None = None,
         tools: list[ToolDefinition] | None = None,
+        tool_call_only: bool = False,
     ):
         self.model = infer_model(model)
         self.system_prompt = system_prompt
@@ -33,6 +34,7 @@ class Executor:
         self.tools = tools or []
         self._usage = Usage()
         self._messages = None
+        self._tool_call_only = tool_call_only
 
     def prepare_messages(self, prompt: str, messages: list[ModelMessage]) -> list[ModelMessage]:
         copied_messages = deepcopy(messages)
@@ -51,11 +53,12 @@ class Executor:
 
         return copied_messages
 
-    async def run(self, prompt: str, messages: list[ModelMessage]) -> AsyncIterator[ModelResponseStreamEvent]:
-        messages = self.prepare_messages(prompt, messages)
+    async def run(self, prompt: str | None, messages: list[ModelMessage]) -> AsyncIterator[ModelResponseStreamEvent]:
+        if prompt:
+            messages = self.prepare_messages(prompt, messages)
         model_request_parameters = ModelRequestParameters(
             function_tools=self.tools,
-            allow_text_result=False,
+            allow_text_result=not self._tool_call_only,
             result_tools=[],
         )
         async with self.model.request_stream(messages, self.model_settings, model_request_parameters) as response:
