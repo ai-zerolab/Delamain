@@ -84,9 +84,6 @@ class DelamainReAct:
             or env.get_template(DEFAULT_REASONING_SYSTEM_PROMPT_TEMPLATE).render(**{
                 "executor_tools": self.executor_tools
             }),
-            result_type=str,
-            result_tool_name="need_executor",
-            result_tool_description="Decide if need executor to execute the task.",
         )
 
         self.executor = Executor(
@@ -129,11 +126,10 @@ class DelamainReAct:
                 part.content, *_ = agent._system_prompts
 
         user_prompt = None
-        original_system_prompt = self.custom_instructions or original_system_prompt
         for p in copied_messages[-1].parts:
             if isinstance(p, UserPromptPart):
                 original_user_prompt = p.content
-                user_prompt = f"<Project Instructions>{original_system_prompt}</Project Instructions>\n<User Prompt>{p.content}</User Prompt>"
+                user_prompt = f"<Project Instructions>{self.custom_instructions or original_system_prompt}</Project Instructions>\n<User Prompt>{p.content}</User Prompt>"
 
         copied_messages[-1].parts = [p for p in copied_messages[-1].parts if not isinstance(p, UserPromptPart)]
 
@@ -169,7 +165,15 @@ class DelamainReAct:
             logger.info("Prepare execution...")
             async for event in self._yield_new_line():
                 yield event
-            self.messages.append(ModelRequest(parts=[UserPromptPart(content=original_user_prompt)]))
+            self.messages.append(
+                ModelRequest(
+                    parts=[
+                        UserPromptPart(
+                            content=f"No need to ask questions, use tools to solve problems wherever possible: <User Prompt>{original_user_prompt}</User Prompt>"
+                        )
+                    ]
+                )
+            )
 
         # Now continue execution
         logger.info("Start execution...")

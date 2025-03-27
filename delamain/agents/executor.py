@@ -56,9 +56,7 @@ class Executor:
     async def run(self, prompt: str | None, messages: list[ModelMessage]) -> AsyncIterator[ModelResponseStreamEvent]:
         messages = self.prepare_messages(prompt, messages)
         model_request_parameters = ModelRequestParameters(
-            function_tools=self.tools,
-            allow_text_result=not self._tool_call_only,
-            result_tools=[],
+            function_tools=self.tools, allow_text_result=not self._tool_call_only, result_tools=[]
         )
         async with self.model.request_stream(messages, self.model_settings, model_request_parameters) as response:
             async for message in response:
