@@ -28,7 +28,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.tools import ToolDefinition
 from sse_starlette import EventSourceResponse
 
-from delamain.agents.agent import DelamainAgent
+from delamain.agents.mas import DelamainMAS
 
 router = APIRouter(
     tags=["Anthropic"],
@@ -58,7 +58,7 @@ async def anthropic_messages(anthropic_request: MessageRequest) -> EventSourceRe
     ]
     messages = map_messages(anthropic_request.system, anthropic_request.messages)
 
-    agent = DelamainAgent.from_config(
+    agent = DelamainMAS.from_config(
         messages=messages,
         executor_tools=executor_tools,
     )
