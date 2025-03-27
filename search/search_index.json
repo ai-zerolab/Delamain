@@ -1,0 +1,1 @@
+{"config":{"lang":["en"],"separator":"[\\s\\-]+","pipeline":["stopWordFilter"]},"docs":[{"location":"","title":"Delamain","text":"<p>This is a template repository for Python projects that use uv for their dependency management.</p>"}]}
