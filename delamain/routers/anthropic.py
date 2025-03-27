@@ -31,6 +31,7 @@ from sse_starlette import EventSourceResponse
 from delamain.agents.mas import DelamainMAS
 from delamain.agents.react import DelamainReAct
 from delamain.config import Config, get_config
+from delamain.log import logger
 
 router = APIRouter(
     tags=["Anthropic"],
@@ -60,6 +61,7 @@ async def anthropic_messages(
         )
         for tool in anthropic_request.tools or []
     ]
+    logger.info(f"Found {len(executor_tools)} executor tools")
     messages = map_messages(anthropic_request.system, anthropic_request.messages)
     if config.mode == "mas":
         agent = DelamainMAS.from_config(

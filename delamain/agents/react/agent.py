@@ -18,6 +18,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 from pydantic_ai.models import KnownModelName, Model
+from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import ToolDefinition
 from pydantic_ai.usage import Usage
@@ -166,6 +167,8 @@ class DelamainReAct:
             self.usage.incr(run.result.usage(), requests=1)
             logger.info(f"Reasoning done, reasoning usage: {self.usage}")
             logger.info("Prepare execution...")
+            async for event in self._yield_new_line():
+                yield event
             self.messages.append(ModelRequest(parts=[UserPromptPart(content=original_user_prompt)]))
 
         # Now continue execution
@@ -175,3 +178,27 @@ class DelamainReAct:
         self.messages = self.executor.all_messages()
         self.usage.incr(self.executor.usage(), requests=1)
         logger.info(f"Execution done, executor usage: {self.executor.usage()}, total usage: {self.usage}")
+
+    async def _yield_new_line(self) -> AsyncIterator[AgentStreamEvent]:
+        async def _(*args, **kwargs) -> AsyncIterator[str]:
+            yield "\n\n"
+
+        mock_agent = Agent(FunctionModel(stream_function=_))
+        async with mock_agent.iter("") as run:
+            async for node in run:
+                if Agent.is_user_prompt_node(node) or Agent.is_end_node(node) or Agent.is_call_tools_node(node):
+                    continue
+
+                elif Agent.is_model_request_node(node):
+                    async with node.stream(run.ctx) as request_stream:
+                        async for event in request_stream:
+                            if (
+                                not event
+                                or (isinstance(event, PartStartEvent) and isinstance(event.part, ToolCallPart))
+                                or (isinstance(event, PartDeltaEvent) and isinstance(event.delta, ToolCallPartDelta))
+                                or isinstance(event, FinalResultEvent)
+                            ):
+                                continue
+                            yield event
+                else:
+                    logger.warning(f"Unknown node: {node}")
