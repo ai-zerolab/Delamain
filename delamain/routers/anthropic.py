@@ -9,7 +9,7 @@ from anthropic.types import (
 from anthropic.types import (
     ToolParam,
 )
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from pydantic_ai.messages import (
     AgentStreamEvent,
@@ -29,6 +29,9 @@ from pydantic_ai.tools import ToolDefinition
 from sse_starlette import EventSourceResponse
 
 from delamain.agents.mas import DelamainMAS
+from delamain.agents.react import DelamainReAct
+from delamain.config import Config, get_config
+from delamain.log import logger
 
 router = APIRouter(
     tags=["Anthropic"],
@@ -41,13 +44,15 @@ class SystemObject(BaseModel):
 
 
 class MessageRequest(BaseModel):
-    messages: list[AnthropicMessage]
+    messages: list[dict[str, Any]]
     tools: list[ToolParam] | None = None
     system: str | list[SystemObject] | None = None
 
 
 @router.post("/messages")
-async def anthropic_messages(anthropic_request: MessageRequest) -> EventSourceResponse:
+async def anthropic_messages(
+    anthropic_request: MessageRequest, config: Config = Depends(get_config)
+) -> EventSourceResponse:
     executor_tools = [
         ToolDefinition(
             name=tool["name"],
@@ -56,12 +61,20 @@ async def anthropic_messages(anthropic_request: MessageRequest) -> EventSourceRe
         )
         for tool in anthropic_request.tools or []
     ]
+    logger.info(f"Found {len(executor_tools)} executor tools")
     messages = map_messages(anthropic_request.system, anthropic_request.messages)
-
-    agent = DelamainMAS.from_config(
-        messages=messages,
-        executor_tools=executor_tools,
-    )
+    if config.mode == "mas":
+        agent = DelamainMAS.from_config(
+            messages=messages,
+            executor_tools=executor_tools,
+        )
+    elif config.mode == "re-act":
+        agent = DelamainReAct.from_config(
+            messages=messages,
+            executor_tools=executor_tools,
+        )
+    else:
+        raise TypeError(f"Unknown mode: {config.mode}")
 
     async def _():
         # Send message_start event
@@ -164,10 +177,8 @@ def map_messages(  # noqa: C901
     messages = [
         ModelRequest(parts=[SystemPromptPart(content=system_prompt_text)]),
     ]
-
     for message in anthropic_messages:
         parts = []
-
         # Handle string content vs list of content blocks
         content_blocks = message["content"]
         if isinstance(content_blocks, str):
@@ -246,7 +257,6 @@ def map_messages(  # noqa: C901
             messages.append(ModelResponse(parts=parts))
         else:  # user
             messages.append(ModelRequest(parts=parts))
-
     return messages
 
 
