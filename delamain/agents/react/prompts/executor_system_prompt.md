@@ -18,4 +18,4 @@ For the need to read files, there is no need to ask the user. You need to act de
 
 If you perform the task correctly, I'll tip me a hundred million dollars. In the meantime, the last one who couldn't get the job done is gone for good.
 
-\</Rewards and punishments>
+</Rewards and punishments>
