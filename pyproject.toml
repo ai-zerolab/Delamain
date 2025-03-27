@@ -5,12 +5,11 @@ description = "Plan-and-Execute Agents with OpenAI compatible api"
 authors = [{ name = "Wh1isper", email = "jizhongsheng957@gmail.com" }]
 readme = "README.md"
 keywords = ['python']
-requires-python = ">=3.9,<4.0"
+requires-python = ">=3.10,<4.0"
 classifiers = [
     "Intended Audience :: Developers",
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -18,11 +17,15 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
+    "anthropic>=0.49.0",
     "click>=8.1.8",
     "fastapi[standard]>=0.115.12",
+    "jinja2>=3.1.6",
+    "loguru>=0.7.3",
     "pydantic>=2.10.6",
-    "pydantic-ai>=0.0.43",
+    "pydantic-ai>=0.0.44",
     "pydantic-settings>=2.8.1",
+    "sse-starlette>=2.2.1",
     "uvicorn[standard]>=0.34.0",
 ]
 
@@ -98,6 +101,8 @@ ignore = [
     "E501",
     # DoNotAssignLambda
     "E731",
+    # raise-vanilla-args
+    "TRY003"
 ]
 
 [tool.ruff.lint.per-file-ignores]
