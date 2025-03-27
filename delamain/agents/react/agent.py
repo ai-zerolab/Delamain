@@ -24,6 +24,7 @@ from pydantic_ai.usage import Usage
 
 from delamain.agents.executor import Executor
 from delamain.agents.mas.agent import UnableToProcess
+from delamain.config import get_config
 from delamain.log import logger
 
 _HERE = Path(__file__).parent
@@ -39,6 +40,25 @@ def render_template(template_file_name: str, **kwargs):
 
 
 class DelamainReAct:
+    @classmethod
+    def from_config(
+        cls,
+        messages: list[ModelMessage],
+        executor_tools: list[ToolDefinition] | None = None,
+    ):
+        config = get_config()
+        return cls(
+            messages,
+            executor_tools=executor_tools,
+            reasoning_model=config.reasoning_model,
+            executor_model=config.executor_model,
+            reasoning_system_prompt=config.reasoning_system_prompt,
+            executor_system_prompt=config.executor_system_prompt,
+            reasoning_model_settings=config.reasoning_model_settings,
+            executor_model_settings=config.executor_model_settings,
+            custom_instructions=config.custom_instructions,
+        )
+
     def __init__(
         self,
         messages: list[ModelMessage],
@@ -50,6 +70,7 @@ class DelamainReAct:
         executor_system_prompt: str | None = None,
         reasoning_model_settings: ModelSettings | None = None,
         executor_model_settings: ModelSettings | None = None,
+        custom_instructions: str | None = None,
     ):
         self.messages = messages
         self.usage = Usage()
@@ -62,14 +83,20 @@ class DelamainReAct:
             or env.get_template(DEFAULT_REASONING_SYSTEM_PROMPT_TEMPLATE).render(**{
                 "executor_tools": self.executor_tools
             }),
+            result_type=str,
+            result_tool_name="need_executor",
+            result_tool_description="Decide if need executor to execute the task.",
         )
+
         self.executor = Executor(
             executor_model,
             system_prompt=executor_system_prompt or render_template(DEFAULT_EXECUTOR_SYSTEM_PROMPT_TEMPLATE),
             model_settings=executor_model_settings,
             tools=self.executor_tools,
-            tool_call_only=True,
+            tool_call_only=False,
         )
+
+        self.custom_instructions = custom_instructions
 
     def _is_tool_return_messages(self, messages: list[ModelMessage]) -> bool:
         last_message = messages[-1]
@@ -88,7 +115,7 @@ class DelamainReAct:
     def prepare_messages(
         self,
         agent,
-    ) -> tuple[str, list[ModelMessage]]:
+    ) -> tuple[str, str, list[ModelMessage]]:
         copied_messages = deepcopy(self.messages)
         if not isinstance(copied_messages[-1], ModelRequest):
             raise UnableToProcess(f"Last message is not a request: {copied_messages[-1]}")
@@ -97,22 +124,24 @@ class DelamainReAct:
         original_system_prompt = ""
         for part in copied_messages[0].parts:
             if isinstance(part, SystemPromptPart):
-                original_system_prompt, *_ = agent._system_prompts
-                part.content = original_system_prompt
+                original_system_prompt = part.content
+                part.content, *_ = agent._system_prompts
 
         user_prompt = None
+        original_system_prompt = self.custom_instructions or original_system_prompt
         for p in copied_messages[-1].parts:
             if isinstance(p, UserPromptPart):
+                original_user_prompt = p.content
                 user_prompt = f"<Project Instructions>{original_system_prompt}</Project Instructions>\n<User Prompt>{p.content}</User Prompt>"
 
         copied_messages[-1].parts = [p for p in copied_messages[-1].parts if not isinstance(p, UserPromptPart)]
 
-        return user_prompt, copied_messages
+        return user_prompt, original_user_prompt, copied_messages
 
-    async def run(self) -> AsyncIterator[AgentStreamEvent]:  # noqa: C901
+    async def run(self) -> AsyncIterator[AgentStreamEvent]:
         if not self._is_tool_return_messages(self.messages):
             # Init prompt, need reasoning
-            user_prompt, message_history = self.prepare_messages(self.reasoning_agent)
+            user_prompt, original_user_prompt, message_history = self.prepare_messages(self.reasoning_agent)
             async with self.reasoning_agent.iter(user_prompt, message_history=message_history) as run:
                 async for node in run:
                     if Agent.is_user_prompt_node(node) or Agent.is_end_node(node) or Agent.is_call_tools_node(node):
@@ -135,42 +164,14 @@ class DelamainReAct:
                         logger.warning(f"Unknown node: {node}")
             self.messages = run.result.all_messages()
             self.usage.incr(run.result.usage(), requests=1)
-
-            self.messages.append(
-                ModelRequest(parts=[UserPromptPart(content="Now let's execute accroding your previous reply")])
-            )
+            logger.info(f"Reasoning done, reasoning usage: {self.usage}")
+            logger.info("Prepare execution...")
+            self.messages.append(ModelRequest(parts=[UserPromptPart(content=original_user_prompt)]))
 
         # Now continue execution
+        logger.info("Start execution...")
         async for event in self.executor.run(None, self.messages):
             yield event
         self.messages = self.executor.all_messages()
         self.usage.incr(self.executor.usage(), requests=1)
-
-        if not self._is_tool_call_messages(self.messages):
-            self.messages.append(
-                ModelRequest(
-                    parts=[UserPromptPart(content="Summary what we have done, use the language of the user's prompt")]
-                )
-            )
-            user_prompt, message_history = self.prepare_messages(self.reasoning_agent)
-            # Now executor exits.
-            async with self.reasoning_agent.iter(user_prompt, message_history=message_history) as run:
-                async for node in run:
-                    if Agent.is_user_prompt_node(node) or Agent.is_end_node(node) or Agent.is_call_tools_node(node):
-                        continue
-
-                    elif Agent.is_model_request_node(node):
-                        async with node.stream(run.ctx) as request_stream:
-                            async for event in request_stream:
-                                if (
-                                    not event
-                                    or (isinstance(event, PartStartEvent) and isinstance(event.part, ToolCallPart))
-                                    or (
-                                        isinstance(event, PartDeltaEvent) and isinstance(event.delta, ToolCallPartDelta)
-                                    )
-                                    or isinstance(event, FinalResultEvent)
-                                ):
-                                    continue
-                                yield event
-                    else:
-                        logger.warning(f"Unknown node: {node}")
+        logger.info(f"Execution done, executor usage: {self.executor.usage()}, total usage: {self.usage}")
