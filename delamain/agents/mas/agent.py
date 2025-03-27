@@ -27,8 +27,8 @@ from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import ToolDefinition
 from pydantic_ai.usage import Usage
 
-from delamain.agents.executor import Executor
-from delamain.agents.tools import get_internal_tools
+from delamain.agents.mas.executor import Executor
+from delamain.agents.mas.tools import get_internal_tools
 from delamain.config import get_config
 from delamain.log import logger
 
@@ -80,7 +80,11 @@ class State(str, enum.Enum):
         }
 
 
-class DelamainAgent:
+class DelamainMAS:
+    """
+    Multi-Agent System (MAS)
+    """
+
     @classmethod
     def from_config(
         cls,
