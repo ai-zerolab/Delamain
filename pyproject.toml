@@ -1,7 +1,7 @@
 [project]
 name = "Delamain"
 version = "0.0.0.dev"
-description = "Plan-and-Execute Agents with OpenAI compatible api"
+description = "Re-Act Agents with OpenAI/Anthropic compatible api"
 authors = [{ name = "Wh1isper", email = "jizhongsheng957@gmail.com" }]
 readme = "README.md"
 keywords = ['python']
