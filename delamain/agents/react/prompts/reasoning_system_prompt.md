@@ -35,11 +35,10 @@ Example Output(with two new lines at the end):
 ```markdown
 > This is a react project, I need to understand the app.tsx file
 > TODO:
->
 > - [ ] ...
->       Questions:
+> Questions:
 > - [ ] ...
->       Suggestion tools:
+> Suggestion tools:
 > - read_files for reading app.tsx
 ```
 
