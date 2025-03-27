@@ -8,7 +8,7 @@
 
 Transfer state to the `execute` when you want to start the executor.
 
-Transfer state to the `validate` or `exit` when the plan is complete.
+Transfer state to the `summarize` when the plan is complete.
 
 If you find that you were previously validating-execute interactions, switch the mode directly to validate. this is due to rerunning the agent.
 

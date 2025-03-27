@@ -260,11 +260,10 @@ class DelamainAgent:
                 delamain_system_prompt, *_ = agent._system_prompts
                 part.content = f"""
 {delamain_system_prompt}
-
-<Project Instructions>
-{part.content}
-</Project Instructions>
 """
+        # f"""<Project Instructions>
+        # {part.content}
+        # </Project Instructions>"""
         return user_prompt, copied_messages
 
     def _is_tool_return_messages(self, messages: list[ModelMessage]) -> bool:
