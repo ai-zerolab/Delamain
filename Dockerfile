@@ -25,6 +25,6 @@ COPY . /app
 RUN uv sync --frozen
 
 ENTRYPOINT ["tini", "--", "uv", "run", "delamain"]
-CMD ["start"]
+CMD ["start", "--host", "0.0.0.0"]
 
 EXPOSE 9870
