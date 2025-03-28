@@ -28,8 +28,8 @@ Example Output:
 > - [ ] ...
 > Questions:
 > - [ ] ...
-> Suggestion tools:
-> - read_files for reading app.tsx
+> Suggestions:
+> - Use read_files tool for reading app.tsx
 ```
 
 The following are **NOT** permitted(Doing something other than thinking.)
